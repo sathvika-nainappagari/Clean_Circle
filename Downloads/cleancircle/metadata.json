@@ -1,0 +1,6 @@
+{
+  "name": "CleanCircle",
+  "description": "A community-driven cleanliness habit platform and civic action tracker for local neighborhoods, starting in Chittoor, Andhra Pradesh.",
+  "requestFramePermissions": ["camera", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
