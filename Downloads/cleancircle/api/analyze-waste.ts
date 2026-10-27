@@ -8,7 +8,9 @@ export default async function handler(req: any, res: any) {
   try {
     const { imageBase64, mimeType, description, location } = req.body || {};
 
-    if (!process.env.GEMINI_API_KEY) {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
       return res.status(500).json({
         error: "GEMINI_API_KEY is not configured.",
       });
@@ -20,29 +22,55 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    let imageData = imageBase64;
+    let imageData: string;
     let imageMimeType = mimeType || "image/jpeg";
 
-    if (imageData.startsWith("data:")) {
-      const commaIndex = imageData.indexOf(",");
+    if (/^https?:\/\//i.test(imageBase64)) {
+      // Download images supplied as URLs.
+      const imageResponse = await fetch(imageBase64);
 
-      if (commaIndex !== -1) {
+      if (!imageResponse.ok) {
+        throw new Error(
+          `Could not download image. HTTP status: ${imageResponse.status}`
+        );
+      }
+
+      const contentType = imageResponse.headers.get("content-type") || "";
+      imageMimeType = contentType.split(";")[0] || imageMimeType;
+
+      if (!imageMimeType.startsWith("image/")) {
+        throw new Error("The supplied URL did not return an image.");
+      }
+
+      const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+      imageData = imageBuffer.toString("base64");
+    } else {
+      // Handle Base64 strings and data URLs.
+      imageData = imageBase64;
+
+      if (imageData.startsWith("data:")) {
+        const commaIndex = imageData.indexOf(",");
+
+        if (commaIndex === -1) {
+          throw new Error("Invalid image data URL.");
+        }
+
         const metadata = imageData.substring(5, commaIndex);
         imageMimeType = metadata.split(";")[0] || imageMimeType;
         imageData = imageData.substring(commaIndex + 1);
       }
+
+      imageData = imageData.replace(/\s/g, "");
     }
 
-    const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-    });
+    const ai = new GoogleGenAI({ apiKey });
 
     const prompt = `
 You are CleanCircle, an AI waste identification assistant.
 
 Analyze the supplied image carefully. Identify only what is visually supported.
 
-Classify the scene as one of:
+Choose an appropriate category:
 - Plastic Waste & Packaging
 - Mixed Municipal Dump
 - Organic / Food Waste
@@ -53,9 +81,8 @@ Classify the scene as one of:
 - No Issue Detected
 - Unable to confidently identify
 
-Consider the user's description and location:
 Location: ${location || "Not provided"}
-Description: ${description || "Not provided"}
+User description: ${description || "Not provided"}
 
 Return valid JSON with these exact fields:
 {
@@ -72,10 +99,12 @@ Return valid JSON with these exact fields:
   "visualEvidenceSummary": "string"
 }
 
-If the image clearly shows waste, describe its type, amount, risks, and cleanup action.
-If the scene is clean, use category "No Issue Detected", severity "None", and isCleanOrNoIssue true.
-If the image is genuinely unclear, explain why in visualEvidenceSummary.
-Do not label an image unclear merely because the waste is small.
+Describe visible waste, its approximate amount, potential risks, and cleanup action.
+If the scene is clean, use category "No Issue Detected", severity "None",
+and isCleanOrNoIssue true.
+Only use "Unable to confidently identify" when the image genuinely does
+not provide enough visual evidence.
+Do not invent details that cannot be seen.
 `;
 
     const response = await ai.models.generateContent({
@@ -86,7 +115,7 @@ Do not label an image unclear merely because the waste is small.
           parts: [
             {
               inlineData: {
-                data: imageData.replace(/\s/g, ""),
+                data: imageData,
                 mimeType: imageMimeType,
               },
             },
