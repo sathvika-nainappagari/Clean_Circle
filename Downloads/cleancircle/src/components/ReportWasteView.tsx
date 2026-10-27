@@ -1,22 +1,20 @@
+```tsx
 import React, { useState } from 'react';
-import { 
-  Camera, 
-  Upload, 
-  MapPin, 
-  Sparkles, 
-  AlertTriangle, 
-  CheckCircle2, 
-  Clock, 
-  ShieldAlert, 
-  Coins, 
-  Filter, 
-  Eye, 
-  Check, 
-  ChevronRight,
+import {
+  Camera,
+  Upload,
+  MapPin,
+  Sparkles,
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  ShieldAlert,
+  Coins,
+  Eye,
+  Check,
   Info,
   Loader2,
-  RefreshCw,
-  HelpCircle
+  HelpCircle,
 } from 'lucide-react';
 import { WasteReport, UserProfile, AIAnalysisResult } from '../types';
 import { CHITTOOR_AREAS } from '../data/mockData';
@@ -107,6 +105,29 @@ const SAMPLE_PRESETS = [
   },
 ];
 
+const createFallbackAnalysis = (offline = false): AIAnalysisResult => ({
+  category: 'Unable to confidently identify',
+  severity: 'Low',
+  estimatedVolume: 'Uncertain',
+  wasteComposition: [],
+  drainageRisk: offline
+    ? 'Unable to determine (Offline)'
+    : 'Unable to determine from current photo',
+  pestRisk: offline
+    ? 'Unable to determine (Offline)'
+    : 'Unable to determine from current photo',
+  recommendedAction: offline
+    ? 'Connection error during inspection. Please try again.'
+    : 'Unable to confidently analyze image. Please ensure photo is well-lit and clear.',
+  responsibleAdvice:
+    'Clear photos ensure sanitation teams accurately locate civic hotspots.',
+  ecoPointsReward: 10,
+  isCleanOrNoIssue: false,
+  visualEvidenceSummary: offline
+    ? 'Network error occurred while connecting to AI inspection service.'
+    : 'Image analysis could not be completed.',
+});
+
 export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
   reports,
   user,
@@ -117,93 +138,108 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
 }) => {
   const [selectedPhoto, setSelectedPhoto] = useState<string>(SAMPLE_PRESETS[0].img);
   const [areaName, setAreaName] = useState<string>(CHITTOOR_AREAS[0]);
-  const [locationText, setLocationText] = useState<string>('Near Apollo University Campus Approach Road');
-  const [description, setDescription] = useState<string>('Roadside plastic litter and polythene bags choking the storm drainage inlet.');
-  
+  const [locationText, setLocationText] = useState<string>(
+    'Near Apollo University Campus Approach Road'
+  );
+  const [description, setDescription] = useState<string>(
+    'Roadside plastic litter and polythene bags choking the storm drainage inlet.'
+  );
+
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [aiResult, setAiResult] = useState<AIAnalysisResult | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [showSuccessBanner, setShowSuccessBanner] = useState<boolean>(false);
 
-  // Handle Photo File Upload
+  // Handle photo uploads.
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (reader.result) {
-          setSelectedPhoto(reader.result as string);
-          setAiResult(null);
-        }
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please select a valid image file.');
+      e.target.value = '';
+      return;
     }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setSelectedPhoto(reader.result);
+        setAiResult(null);
+      }
+    };
+
+    reader.onerror = () => {
+      alert('Unable to read this image. Please try another file.');
+    };
+
+    reader.readAsDataURL(file);
   };
 
-  // Run AI Inspection Analysis
+  // Run AI inspection analysis.
   const handleRunAIAnalysis = async () => {
-    if (!selectedPhoto) return;
+    if (!selectedPhoto || isAnalyzing) return;
+
     setIsAnalyzing(true);
     setAiResult(null);
 
     try {
+      const isSvg = selectedPhoto.startsWith('data:image/svg+xml');
+      const isDataUrl = selectedPhoto.startsWith('data:image/');
+      const isRemoteUrl = /^https?:\/\//i.test(selectedPhoto);
+
+      // Separate image URLs from uploaded image data.
+      // SVG is sent separately so the backend can convert it to PNG.
+      const requestBody = {
+        imageBase64: isSvg || isRemoteUrl ? '' : selectedPhoto,
+        imageUrl: isRemoteUrl ? selectedPhoto : '',
+        svgDataUrl: isSvg ? selectedPhoto : '',
+        mimeType: isSvg
+          ? 'image/svg+xml'
+          : isDataUrl
+            ? selectedPhoto.slice(5, selectedPhoto.indexOf(';'))
+            : 'image/jpeg',
+        location: `${locationText}, ${areaName}`,
+        description,
+      };
+
       const response = await fetch('/api/analyze-waste', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: selectedPhoto,
-          location: `${locationText}, ${areaName}`,
-          description: description,
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.analysis) {
-          setAiResult(data.analysis);
-          fireEcoConfetti();
-          return;
-        }
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        console.error('AI analysis API error:', data.error || response.statusText);
+        setAiResult(createFallbackAnalysis());
+        return;
       }
-      
-      // If server returns error status
-      setAiResult({
-        category: 'Unable to confidently identify',
-        severity: 'Low',
-        estimatedVolume: 'Uncertain',
-        wasteComposition: [],
-        drainageRisk: 'Unable to determine from current photo',
-        pestRisk: 'Unable to determine from current photo',
-        recommendedAction: 'Unable to confidently analyze image. Please ensure photo is well-lit and clear.',
-        responsibleAdvice: 'Clear photos ensure sanitation teams accurately locate civic hotspots.',
-        ecoPointsReward: 10,
-        isCleanOrNoIssue: false,
-        visualEvidenceSummary: 'Image analysis could not be completed.',
-      });
-    } catch (e) {
-      console.warn('API call error:', e);
-      setAiResult({
-        category: 'Unable to confidently identify',
-        severity: 'Low',
-        estimatedVolume: 'Uncertain',
-        wasteComposition: [],
-        drainageRisk: 'Unable to determine (Offline)',
-        pestRisk: 'Unable to determine (Offline)',
-        recommendedAction: 'Connection error during inspection. Please try again.',
-        responsibleAdvice: 'Clear photos ensure sanitation teams accurately locate civic hotspots.',
-        ecoPointsReward: 10,
-        isCleanOrNoIssue: false,
-        visualEvidenceSummary: 'Network error occurred while connecting to AI inspection service.',
-      });
+
+      if (data.analysis) {
+        setAiResult(data.analysis);
+        fireEcoConfetti();
+      } else {
+        console.error('API response did not contain an analysis:', data);
+        setAiResult(createFallbackAnalysis());
+      }
+    } catch (error) {
+      console.warn('API call error:', error);
+      setAiResult(createFallbackAnalysis(true));
     } finally {
       setIsAnalyzing(false);
     }
   };
 
-  // Submit Final Civic Report
+  // Submit the final civic report.
   const handleSubmitReport = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedPhoto || !locationText) return;
+
+    if (!selectedPhoto || !locationText.trim()) return;
 
     const analysisToUse: AIAnalysisResult = aiResult || {
       category: 'Civic Spot Check',
@@ -218,16 +254,22 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
       isCleanOrNoIssue: false,
     };
 
-    const isClean = analysisToUse.isCleanOrNoIssue || analysisToUse.category === 'No Issue Detected';
+    const isClean =
+      analysisToUse.isCleanOrNoIssue ||
+      analysisToUse.category === 'No Issue Detected';
 
     const newReport: WasteReport = {
       id: `rep-${Date.now()}`,
-      title: isClean 
+      title: isClean
         ? `Clean Area Verified at ${locationText.split(',')[0]}`
         : `${analysisToUse.category} Spot at ${locationText.split(',')[0]}`,
       location: locationText,
-      areaName: areaName,
-      description: description || (isClean ? 'Verified clean neighborhood area.' : 'Roadside dump reported by citizen for civic cleanup.'),
+      areaName,
+      description:
+        description ||
+        (isClean
+          ? 'Verified clean neighborhood area.'
+          : 'Roadside dump reported by citizen for civic cleanup.'),
       imageUrl: selectedPhoto,
       reportedAt: 'Just now',
       reportedBy: `${user.name} (Citizen)`,
@@ -242,7 +284,6 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
     fireBigCelebration();
     setShowSuccessBanner(true);
 
-    // Reset Form
     setDescription('');
     setAiResult(null);
 
@@ -251,16 +292,17 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
     }, 6000);
   };
 
-  // Filtered reports list
-  const filteredReports = reports.filter(r => {
-    const matchesArea = selectedArea === 'All Pilot Areas' || r.areaName === selectedArea;
-    const matchesStatus = statusFilter === 'All' || r.status === statusFilter;
+  const filteredReports = reports.filter((report) => {
+    const matchesArea =
+      selectedArea === 'All Pilot Areas' || report.areaName === selectedArea;
+    const matchesStatus =
+      statusFilter === 'All' || report.status === statusFilter;
+
     return matchesArea && matchesStatus;
   });
 
   return (
     <div className="space-y-8">
-      {/* Top Banner / Concept Explainer */}
       <div className="bg-gradient-to-r from-emerald-800 to-teal-800 rounded-2xl p-6 text-white shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-2 flex-wrap">
@@ -272,10 +314,15 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
               Prototype • Demo Data
             </span>
           </div>
-          <h2 className="text-2xl font-black tracking-tight">Report Roadside Dumping & Waste Hotspots</h2>
+
+          <h2 className="text-2xl font-black tracking-tight">
+            Report Roadside Dumping &amp; Waste Hotspots
+          </h2>
+
           <p className="text-sm text-emerald-100 mt-1 max-w-2xl">
-            Demonstrating how AI analyzes waste category, composition, and drainage hazard to dispatch reports. 
-            Note: Workflows and municipal dispatches in this prototype are simulated demonstrations.
+            Demonstrating how AI analyzes waste category, composition, and
+            drainage hazard to dispatch reports. Note: Workflows and municipal
+            dispatches in this prototype are simulated demonstrations.
           </p>
         </div>
 
@@ -295,11 +342,18 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
               ✓
             </div>
             <div>
-              <p className="text-sm font-bold">Civic Report Logged Successfully! (Simulated Workflow)</p>
-              <p className="text-xs text-emerald-700">Prototype demonstration: In a live deployment, this report is dispatched to the ward team. +35 Eco Points credited to demo profile.</p>
+              <p className="text-sm font-bold">
+                Civic Report Logged Successfully! (Simulated Workflow)
+              </p>
+              <p className="text-xs text-emerald-700">
+                Prototype demonstration: In a live deployment, this report is
+                dispatched to the ward team. +35 Eco Points credited to demo
+                profile.
+              </p>
             </div>
           </div>
-          <button 
+
+          <button
             onClick={() => setShowSuccessBanner(false)}
             className="text-xs font-semibold text-emerald-800 hover:text-emerald-950 px-2 py-1"
           >
@@ -309,7 +363,6 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Left Column: Form & AI Scanner (7 Cols) */}
         <div className="lg:col-span-7 space-y-6">
           <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs">
             <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2 mb-4">
@@ -317,13 +370,11 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
               <span>Step 1: Upload or Choose Photo</span>
             </h3>
 
-            {/* Photo Selection / Preset Bar */}
             <div className="space-y-3">
               <div className="flex items-center justify-between text-xs text-slate-500">
                 <span>Select a sample hotspot or upload custom photo:</span>
               </div>
 
-              {/* Preset Buttons */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                 {SAMPLE_PRESETS.map((preset, idx) => (
                   <button
@@ -343,30 +394,34 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                     }`}
                   >
                     <div className="relative w-full h-16 rounded-lg overflow-hidden bg-slate-100">
-                      <img 
-                        src={preset.img} 
-                        alt={preset.name} 
+                      <img
+                        src={preset.img}
+                        alt={preset.name}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                         referrerPolicy="no-referrer"
                       />
-                      <span className={`absolute top-1 left-1 text-[9px] font-bold px-1.5 py-0.5 rounded shadow-xs ${
-                        preset.tag === 'Clean Verified' 
-                          ? 'bg-emerald-700 text-white' 
-                          : preset.tag === 'Drain Hazard'
-                          ? 'bg-sky-700 text-white'
-                          : preset.tag === 'Organic Waste'
-                          ? 'bg-lime-700 text-white'
-                          : preset.tag === 'E-Waste'
-                          ? 'bg-purple-700 text-white'
-                          : preset.tag === 'Bulky Waste'
-                          ? 'bg-amber-700 text-white'
-                          : preset.tag === 'Segregated'
-                          ? 'bg-teal-700 text-white'
-                          : 'bg-slate-900/80 text-white'
-                      }`}>
+
+                      <span
+                        className={`absolute top-1 left-1 text-[9px] font-bold px-1.5 py-0.5 rounded shadow-xs ${
+                          preset.tag === 'Clean Verified'
+                            ? 'bg-emerald-700 text-white'
+                            : preset.tag === 'Drain Hazard'
+                              ? 'bg-sky-700 text-white'
+                              : preset.tag === 'Organic Waste'
+                                ? 'bg-lime-700 text-white'
+                                : preset.tag === 'E-Waste'
+                                  ? 'bg-purple-700 text-white'
+                                  : preset.tag === 'Bulky Waste'
+                                    ? 'bg-amber-700 text-white'
+                                    : preset.tag === 'Segregated'
+                                      ? 'bg-teal-700 text-white'
+                                      : 'bg-slate-900/80 text-white'
+                        }`}
+                      >
                         {preset.tag}
                       </span>
                     </div>
+
                     <span className="font-bold text-slate-800 text-[11px] leading-tight line-clamp-1">
                       {preset.name}
                     </span>
@@ -374,29 +429,28 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                 ))}
               </div>
 
-              {/* File Upload Input */}
               <div className="mt-2 flex items-center gap-3">
                 <label className="flex-1 cursor-pointer border border-dashed border-slate-300 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/30 rounded-xl p-3 text-center transition flex items-center justify-center gap-2 text-xs font-semibold text-slate-700">
                   <Upload className="w-4 h-4 text-emerald-600" />
                   <span>Upload from Device / Take Photo</span>
-                  <input 
-                    type="file" 
-                    accept="image/*" 
-                    capture="environment" 
-                    onChange={handleFileUpload} 
-                    className="hidden" 
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleFileUpload}
+                    className="hidden"
                   />
                 </label>
               </div>
 
-              {/* Image Preview & AI Scan CTA */}
               <div className="relative mt-3 rounded-xl overflow-hidden border border-slate-200 bg-slate-900 group">
-                <img 
-                  src={selectedPhoto} 
-                  alt="Waste to inspect" 
+                <img
+                  src={selectedPhoto}
+                  alt="Waste to inspect"
                   className="w-full h-56 object-cover opacity-90"
                   referrerPolicy="no-referrer"
                 />
+
                 <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-transparent flex items-end p-4">
                   <button
                     type="button"
@@ -412,7 +466,11 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                     ) : (
                       <>
                         <Sparkles className="w-4 h-4" />
-                        <span>{aiResult ? 'Re-Analyze with Evidence AI' : 'Run Evidence-Based AI Inspection'}</span>
+                        <span>
+                          {aiResult
+                            ? 'Re-Analyze with Evidence AI'
+                            : 'Run Evidence-Based AI Inspection'}
+                        </span>
                       </>
                     )}
                   </button>
@@ -420,51 +478,58 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
               </div>
             </div>
 
-            {/* AI Analysis Result Card */}
             {aiResult && (
-              <div className={`mt-5 p-4 rounded-xl border space-y-3 animate-in fade-in ${
-                aiResult.isCleanOrNoIssue || aiResult.category === 'No Issue Detected'
-                  ? 'bg-emerald-50/90 border-emerald-300 text-slate-900'
-                  : aiResult.category === 'Unable to confidently identify'
-                  ? 'bg-amber-50/90 border-amber-300 text-slate-900'
-                  : 'bg-emerald-50/70 border-emerald-200 text-slate-900'
-              }`}>
+              <div
+                className={`mt-5 p-4 rounded-xl border space-y-3 animate-in fade-in ${
+                  aiResult.isCleanOrNoIssue ||
+                  aiResult.category === 'No Issue Detected'
+                    ? 'bg-emerald-50/90 border-emerald-300 text-slate-900'
+                    : aiResult.category === 'Unable to confidently identify'
+                      ? 'bg-amber-50/90 border-amber-300 text-slate-900'
+                      : 'bg-emerald-50/70 border-emerald-200 text-slate-900'
+                }`}
+              >
                 <div className="flex items-center justify-between border-b border-emerald-200/80 pb-2">
                   <div className="flex items-center gap-2">
-                    {aiResult.isCleanOrNoIssue || aiResult.category === 'No Issue Detected' ? (
+                    {aiResult.isCleanOrNoIssue ||
+                    aiResult.category === 'No Issue Detected' ? (
                       <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                     ) : aiResult.category === 'Unable to confidently identify' ? (
                       <HelpCircle className="w-4 h-4 text-amber-600" />
                     ) : (
                       <Sparkles className="w-4 h-4 text-emerald-600" />
                     )}
+
                     <span className="font-bold text-sm text-emerald-950">
-                      {aiResult.isCleanOrNoIssue || aiResult.category === 'No Issue Detected'
+                      {aiResult.isCleanOrNoIssue ||
+                      aiResult.category === 'No Issue Detected'
                         ? 'Clean Area Verified — No Issue Detected'
                         : aiResult.category === 'Unable to confidently identify'
-                        ? 'Inspection Notice — Unable to Confidently Identify'
-                        : 'CleanCircle AI Evidence Analysis'}
+                          ? 'Inspection Notice — Unable to Confidently Identify'
+                          : 'CleanCircle AI Evidence Analysis'}
                     </span>
                   </div>
+
                   <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-200 text-emerald-900">
                     +{aiResult.ecoPointsReward} Eco Points
                   </span>
                 </div>
 
-                {/* Clean Area Banner Callout */}
-                {(aiResult.isCleanOrNoIssue || aiResult.category === 'No Issue Detected') && (
+                {(aiResult.isCleanOrNoIssue ||
+                  aiResult.category === 'No Issue Detected') && (
                   <div className="p-3 bg-white/90 rounded-lg border border-emerald-200 text-xs text-emerald-900 space-y-1">
                     <div className="font-bold flex items-center gap-1.5 text-emerald-800">
                       <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                       <span>No Environmental Hazard or Waste Found</span>
                     </div>
                     <p className="text-slate-700">
-                      No report is necessary. The AI verified that this area is clean with no visible waste accumulation, dump pile, or drainage blockage.
+                      No report is necessary. The AI verified that this area is
+                      clean with no visible waste accumulation, dump pile, or
+                      drainage blockage.
                     </p>
                   </div>
                 )}
 
-                {/* Ambiguous Image Banner Callout */}
                 {aiResult.category === 'Unable to confidently identify' && (
                   <div className="p-3 bg-white/90 rounded-lg border border-amber-200 text-xs text-amber-900 space-y-1">
                     <div className="font-bold flex items-center gap-1.5 text-amber-800">
@@ -472,81 +537,117 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                       <span>Photo Insufficient to Determine Waste</span>
                     </div>
                     <p className="text-slate-700">
-                      Rather than guessing, CleanCircle requires a clearer, well-lit photograph. If an issue exists, retake a closer shot.
+                      Rather than guessing, CleanCircle requires a clearer,
+                      well-lit photograph. If an issue exists, retake a closer
+                      shot.
                     </p>
                   </div>
                 )}
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
                   <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
-                    <span className="text-slate-500 block text-[10px] uppercase font-semibold">Detected Category</span>
-                    <span className="font-bold text-slate-900">{aiResult.category}</span>
+                    <span className="text-slate-500 block text-[10px] uppercase font-semibold">
+                      Detected Category
+                    </span>
+                    <span className="font-bold text-slate-900">
+                      {aiResult.category}
+                    </span>
                   </div>
 
                   <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
-                    <span className="text-slate-500 block text-[10px] uppercase font-semibold">Severity Level</span>
-                    <span className={`font-bold ${
-                      aiResult.severity === 'Critical' ? 'text-rose-600' :
-                      aiResult.severity === 'High' ? 'text-amber-600' :
-                      aiResult.severity === 'Moderate' ? 'text-yellow-600' :
-                      aiResult.severity === 'Low' ? 'text-emerald-700' :
-                      'text-emerald-700'
-                    }`}>
-                      {aiResult.severity === 'None' ? 'None (Clean)' : aiResult.severity}
+                    <span className="text-slate-500 block text-[10px] uppercase font-semibold">
+                      Severity Level
+                    </span>
+                    <span
+                      className={`font-bold ${
+                        aiResult.severity === 'Critical'
+                          ? 'text-rose-600'
+                          : aiResult.severity === 'High'
+                            ? 'text-amber-600'
+                            : aiResult.severity === 'Moderate'
+                              ? 'text-yellow-600'
+                              : 'text-emerald-700'
+                      }`}
+                    >
+                      {aiResult.severity === 'None'
+                        ? 'None (Clean)'
+                        : aiResult.severity}
                     </span>
                   </div>
 
                   <div className="bg-white p-2.5 rounded-lg border border-emerald-100 col-span-2 sm:col-span-1">
-                    <span className="text-slate-500 block text-[10px] uppercase font-semibold">Est. Volume</span>
-                    <span className="font-bold text-slate-900">{aiResult.estimatedVolume}</span>
+                    <span className="text-slate-500 block text-[10px] uppercase font-semibold">
+                      Est. Volume
+                    </span>
+                    <span className="font-bold text-slate-900">
+                      {aiResult.estimatedVolume}
+                    </span>
                   </div>
                 </div>
 
-                {/* Visible Waste Composition Tags if any */}
-                {aiResult.wasteComposition && aiResult.wasteComposition.length > 0 && (
-                  <div className="bg-white p-2.5 rounded-lg border border-emerald-100 text-xs">
-                    <span className="text-slate-500 block text-[10px] uppercase font-semibold mb-1">Visibly Supported Items</span>
-                    <div className="flex flex-wrap gap-1">
-                      {aiResult.wasteComposition.map((item, i) => (
-                        <span key={i} className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-medium">
-                          {item}
-                        </span>
-                      ))}
+                {aiResult.wasteComposition &&
+                  aiResult.wasteComposition.length > 0 && (
+                    <div className="bg-white p-2.5 rounded-lg border border-emerald-100 text-xs">
+                      <span className="text-slate-500 block text-[10px] uppercase font-semibold mb-1">
+                        Visibly Supported Items
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {aiResult.wasteComposition.map((item, i) => (
+                          <span
+                            key={i}
+                            className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-medium"
+                          >
+                            {item}
+                          </span>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {/* Visual Evidence Summary */}
                 {aiResult.visualEvidenceSummary && (
                   <div className="bg-white/80 p-2.5 rounded-lg border border-emerald-100 text-xs text-slate-700">
-                    <strong className="text-slate-900 block text-[10px] uppercase font-semibold mb-0.5">Visual Evidence:</strong>
+                    <strong className="text-slate-900 block text-[10px] uppercase font-semibold mb-0.5">
+                      Visual Evidence:
+                    </strong>
                     <span>{aiResult.visualEvidenceSummary}</span>
                   </div>
                 )}
 
-                {/* Risk Indicators */}
                 <div className="space-y-1.5 pt-1 text-xs">
                   <div className="flex items-start gap-2 text-slate-700">
                     <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                    <span><strong className="text-slate-900">Drainage Risk:</strong> {aiResult.drainageRisk}</span>
+                    <span>
+                      <strong className="text-slate-900">Drainage Risk:</strong>{' '}
+                      {aiResult.drainageRisk}
+                    </span>
                   </div>
+
                   <div className="flex items-start gap-2 text-slate-700">
                     <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                    <span><strong className="text-slate-900">Pest Hazard:</strong> {aiResult.pestRisk}</span>
+                    <span>
+                      <strong className="text-slate-900">Pest Hazard:</strong>{' '}
+                      {aiResult.pestRisk}
+                    </span>
                   </div>
+
                   <div className="flex items-start gap-2 text-emerald-800 bg-white/80 p-2 rounded-lg border border-emerald-100">
                     <Info className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span><strong className="text-emerald-950">Civic Guidance:</strong> {aiResult.responsibleAdvice}</span>
+                    <span>
+                      <strong className="text-emerald-950">Civic Guidance:</strong>{' '}
+                      {aiResult.responsibleAdvice}
+                    </span>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Location & Details Form */}
-            <form onSubmit={handleSubmitReport} className="mt-6 space-y-4 pt-5 border-t border-slate-100">
+            <form
+              onSubmit={handleSubmitReport}
+              className="mt-6 space-y-4 pt-5 border-t border-slate-100"
+            >
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 <MapPin className="w-4 h-4 text-emerald-600" />
-                <span>Step 2: Location & Neighborhood Details</span>
+                <span>Step 2: Location &amp; Neighborhood Details</span>
               </h3>
 
               <div>
@@ -558,8 +659,10 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                   onChange={(e) => setAreaName(e.target.value)}
                   className="w-full text-sm border border-slate-300 rounded-xl px-3 py-2 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 >
-                  {CHITTOOR_AREAS.map(area => (
-                    <option key={area} value={area}>{area}</option>
+                  {CHITTOOR_AREAS.map((area) => (
+                    <option key={area} value={area}>
+                      {area}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -580,7 +683,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Short Description & Context (Optional)
+                  Short Description &amp; Context (Optional)
                 </label>
                 <textarea
                   rows={2}
@@ -593,15 +696,12 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
 
               <button
                 type="submit"
-                className={`w-full py-3 text-white font-bold rounded-xl shadow-md transition active:scale-98 flex items-center justify-center gap-2 text-sm ${
-                  aiResult?.isCleanOrNoIssue || aiResult?.category === 'No Issue Detected'
-                    ? 'bg-emerald-600 hover:bg-emerald-700'
-                    : 'bg-emerald-600 hover:bg-emerald-700'
-                }`}
+                className="w-full py-3 text-white font-bold rounded-xl shadow-md transition active:scale-98 flex items-center justify-center gap-2 text-sm bg-emerald-600 hover:bg-emerald-700"
               >
                 <Check className="w-4 h-4" />
                 <span>
-                  {aiResult?.isCleanOrNoIssue || aiResult?.category === 'No Issue Detected'
+                  {aiResult?.isCleanOrNoIssue ||
+                  aiResult?.category === 'No Issue Detected'
                     ? 'Log Verified Clean Spot (+15 Points)'
                     : 'Submit Civic Report (+35 Points)'}
                 </span>
@@ -610,13 +710,11 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
           </div>
         </div>
 
-        {/* Right Column: Status Pipeline & Recent Reports Feed (5 Cols) */}
         <div className="lg:col-span-5 space-y-6">
-          {/* Status Pipeline Visualizer */}
           <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs">
             <h4 className="text-sm font-bold text-slate-900 mb-3 flex items-center gap-2">
               <Clock className="w-4 h-4 text-emerald-600" />
-              <span>Report Lifecycle & Resolution Flow</span>
+              <span>Report Lifecycle &amp; Resolution Flow</span>
             </h4>
 
             <div className="grid grid-cols-4 gap-1 text-center">
@@ -646,7 +744,6 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
             </div>
           </div>
 
-          {/* Filter and Feed of Reports */}
           <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div>
@@ -654,25 +751,24 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                 <p className="text-xs text-slate-500">Active reports in pilot</p>
               </div>
 
-              {/* Status Filter Pill */}
               <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg text-xs">
-                {['All', 'Reported', 'Assigned', 'Resolved'].map((st) => (
+                {['All', 'Reported', 'Assigned', 'Resolved'].map((status) => (
                   <button
-                    key={st}
-                    onClick={() => setStatusFilter(st)}
+                    key={status}
+                    type="button"
+                    onClick={() => setStatusFilter(status)}
                     className={`px-2 py-0.5 rounded-md font-medium text-[11px] transition ${
-                      statusFilter === st 
-                        ? 'bg-white text-slate-900 shadow-xs font-bold' 
+                      statusFilter === status
+                        ? 'bg-white text-slate-900 shadow-xs font-bold'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    {st}
+                    {status}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Reports List */}
             <div className="space-y-3 max-h-[580px] overflow-y-auto pr-1">
               {filteredReports.map((report) => (
                 <div
@@ -680,8 +776,8 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                   className="p-3.5 rounded-xl border border-slate-200/90 hover:border-emerald-300 hover:bg-emerald-50/20 transition space-y-2.5"
                 >
                   <div className="flex items-start gap-3">
-                    <img 
-                      src={report.imageUrl} 
+                    <img
+                      src={report.imageUrl}
                       alt={report.title}
                       className="w-16 h-16 rounded-lg object-cover shrink-0 border border-slate-100 cursor-pointer"
                       onClick={() => onOpenReportDetail(report)}
@@ -690,23 +786,31 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-1">
-                        <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${
-                          report.status === 'Resolved' ? 'bg-emerald-100 text-emerald-800' :
-                          report.status === 'Cleaning in Progress' ? 'bg-sky-100 text-sky-800' :
-                          report.status === 'Assigned' ? 'bg-amber-100 text-amber-800' :
-                          'bg-rose-100 text-rose-800'
-                        }`}>
+                        <span
+                          className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${
+                            report.status === 'Resolved'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : report.status === 'Cleaning in Progress'
+                                ? 'bg-sky-100 text-sky-800'
+                                : report.status === 'Assigned'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-rose-100 text-rose-800'
+                          }`}
+                        >
                           {report.status}
                         </span>
-                        <span className="text-[10px] text-slate-400">{report.reportedAt}</span>
+                        <span className="text-[10px] text-slate-400">
+                          {report.reportedAt}
+                        </span>
                       </div>
 
-                      <h5 
+                      <h5
                         onClick={() => onOpenReportDetail(report)}
                         className="text-xs font-bold text-slate-900 mt-1 line-clamp-1 cursor-pointer hover:text-emerald-700"
                       >
                         {report.title}
                       </h5>
+
                       <p className="text-[11px] text-slate-500 line-clamp-1 flex items-center gap-1 mt-0.5">
                         <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
                         <span>{report.location}</span>
@@ -714,7 +818,6 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Footer with verification button */}
                   <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
                     <div className="text-[11px] text-slate-500">
                       <span>By {report.reportedBy}</span>
@@ -722,6 +825,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
 
                     <div className="flex items-center gap-2">
                       <button
+                        type="button"
                         onClick={() => onVerifyReport(report.id)}
                         disabled={report.userHasVerified}
                         className={`text-[11px] px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 transition ${
@@ -731,10 +835,15 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                         }`}
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>{report.userHasVerified ? 'Verified' : `Verify (${report.verifiedCount})`}</span>
+                        <span>
+                          {report.userHasVerified
+                            ? 'Verified'
+                            : `Verify (${report.verifiedCount})`}
+                        </span>
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => onOpenReportDetail(report)}
                         className="text-[11px] text-slate-500 hover:text-slate-900 flex items-center gap-0.5 p-1"
                       >
@@ -757,3 +866,4 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
     </div>
   );
 };
+```
