@@ -1,4 +1,3 @@
-```tsx
 import React, { useState } from 'react';
 import {
   Camera,
@@ -128,6 +127,51 @@ const createFallbackAnalysis = (offline = false): AIAnalysisResult => ({
     : 'Image analysis could not be completed.',
 });
 
+/**
+ * Convert an SVG data URL to PNG before sending it to the AI service.
+ * This prevents percent-encoded SVG markup from being interpreted as
+ * Base64 image data.
+ */
+const normalizeImageForAnalysis = async (
+  imageData: string
+): Promise<string> => {
+  if (!imageData.startsWith('data:image/svg+xml')) {
+    return imageData;
+  }
+
+  return new Promise<string>((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+
+        canvas.width = image.naturalWidth || 800;
+        canvas.height = image.naturalHeight || 500;
+
+        const context = canvas.getContext('2d');
+
+        if (!context) {
+          reject(new Error('Unable to create canvas context.'));
+          return;
+        }
+
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+        resolve(canvas.toDataURL('image/png'));
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    image.onerror = () => {
+      reject(new Error('Unable to convert the SVG image to PNG.'));
+    };
+
+    image.src = imageData;
+  });
+};
+
 export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
   reports,
   user,
@@ -136,11 +180,16 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
   onVerifyReport,
   onOpenReportDetail,
 }) => {
-  const [selectedPhoto, setSelectedPhoto] = useState<string>(SAMPLE_PRESETS[0].img);
+  const [selectedPhoto, setSelectedPhoto] = useState<string>(
+    SAMPLE_PRESETS[0].img
+  );
+
   const [areaName, setAreaName] = useState<string>(CHITTOOR_AREAS[0]);
+
   const [locationText, setLocationText] = useState<string>(
     'Near Apollo University Campus Approach Road'
   );
+
   const [description, setDescription] = useState<string>(
     'Roadside plastic litter and polythene bags choking the storm drainage inlet.'
   );
@@ -153,6 +202,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
   // Handle photo uploads.
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
@@ -186,19 +236,26 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
 
     try {
       const isSvg = selectedPhoto.startsWith('data:image/svg+xml');
-      const isDataUrl = selectedPhoto.startsWith('data:image/');
       const isRemoteUrl = /^https?:\/\//i.test(selectedPhoto);
 
-      // Separate image URLs from uploaded image data.
-      // SVG is sent separately so the backend can convert it to PNG.
+      // Convert SVG data URLs into PNG data URLs.
+      // Remote image URLs remain URLs for backend processing.
+      const imageForAnalysis = isSvg
+        ? await normalizeImageForAnalysis(selectedPhoto)
+        : selectedPhoto;
+
+      const isDataUrl = imageForAnalysis.startsWith('data:image/');
+
       const requestBody = {
-        imageBase64: isSvg || isRemoteUrl ? '' : selectedPhoto,
+        imageBase64: isRemoteUrl ? '' : imageForAnalysis,
         imageUrl: isRemoteUrl ? selectedPhoto : '',
-        svgDataUrl: isSvg ? selectedPhoto : '',
-        mimeType: isSvg
-          ? 'image/svg+xml'
+        mimeType: isRemoteUrl
+          ? 'image/jpeg'
           : isDataUrl
-            ? selectedPhoto.slice(5, selectedPhoto.indexOf(';'))
+            ? imageForAnalysis.slice(
+                5,
+                imageForAnalysis.indexOf(';')
+              )
             : 'image/jpeg',
         location: `${locationText}, ${areaName}`,
         description,
@@ -215,7 +272,11 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        console.error('AI analysis API error:', data.error || response.statusText);
+        console.error(
+          'AI analysis API error:',
+          data.error || response.statusText
+        );
+
         setAiResult(createFallbackAnalysis());
         return;
       }
@@ -228,7 +289,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
         setAiResult(createFallbackAnalysis());
       }
     } catch (error) {
-      console.warn('API call error:', error);
+      console.error('AI analysis failed:', error);
       setAiResult(createFallbackAnalysis(true));
     } finally {
       setIsAnalyzing(false);
@@ -295,6 +356,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
   const filteredReports = reports.filter((report) => {
     const matchesArea =
       selectedArea === 'All Pilot Areas' || report.areaName === selectedArea;
+
     const matchesStatus =
       statusFilter === 'All' || report.status === statusFilter;
 
@@ -310,6 +372,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
               <Camera className="w-3.5 h-3.5" />
               <span>AI-Assisted Civic Reporting</span>
             </div>
+
             <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-amber-400/20 text-amber-300 border border-amber-400/30 rounded">
               Prototype • Demo Data
             </span>
@@ -330,7 +393,9 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
           <Coins className="w-6 h-6 text-amber-400" />
           <div>
             <div className="text-xs text-emerald-200">Demo Civic Reward</div>
-            <div className="text-sm font-bold text-white">+35 Eco Points / Report</div>
+            <div className="text-sm font-bold text-white">
+              +35 Eco Points / Report
+            </div>
           </div>
         </div>
       </div>
@@ -341,10 +406,12 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
             <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold">
               ✓
             </div>
+
             <div>
               <p className="text-sm font-bold">
                 Civic Report Logged Successfully! (Simulated Workflow)
               </p>
+
               <p className="text-xs text-emerald-700">
                 Prototype demonstration: In a live deployment, this report is
                 dispatched to the ward team. +35 Eco Points credited to demo
@@ -354,6 +421,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
           </div>
 
           <button
+            type="button"
             onClick={() => setShowSuccessBanner(false)}
             className="text-xs font-semibold text-emerald-800 hover:text-emerald-950 px-2 py-1"
           >
@@ -433,6 +501,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                 <label className="flex-1 cursor-pointer border border-dashed border-slate-300 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/30 rounded-xl p-3 text-center transition flex items-center justify-center gap-2 text-xs font-semibold text-slate-700">
                   <Upload className="w-4 h-4 text-emerald-600" />
                   <span>Upload from Device / Take Photo</span>
+
                   <input
                     type="file"
                     accept="image/*"
@@ -522,6 +591,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                       <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                       <span>No Environmental Hazard or Waste Found</span>
                     </div>
+
                     <p className="text-slate-700">
                       No report is necessary. The AI verified that this area is
                       clean with no visible waste accumulation, dump pile, or
@@ -536,6 +606,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                       <AlertTriangle className="w-4 h-4 text-amber-600" />
                       <span>Photo Insufficient to Determine Waste</span>
                     </div>
+
                     <p className="text-slate-700">
                       Rather than guessing, CleanCircle requires a clearer,
                       well-lit photograph. If an issue exists, retake a closer
@@ -558,6 +629,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                     <span className="text-slate-500 block text-[10px] uppercase font-semibold">
                       Severity Level
                     </span>
+
                     <span
                       className={`font-bold ${
                         aiResult.severity === 'Critical'
@@ -591,6 +663,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                       <span className="text-slate-500 block text-[10px] uppercase font-semibold mb-1">
                         Visibly Supported Items
                       </span>
+
                       <div className="flex flex-wrap gap-1">
                         {aiResult.wasteComposition.map((item, i) => (
                           <span
@@ -654,6 +727,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Chittoor Pilot Area / Ward
                 </label>
+
                 <select
                   value={areaName}
                   onChange={(e) => setAreaName(e.target.value)}
@@ -671,6 +745,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Street Landmark / Specific Spot
                 </label>
+
                 <input
                   type="text"
                   required
@@ -685,6 +760,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Short Description &amp; Context (Optional)
                 </label>
+
                 <textarea
                   rows={2}
                   value={description}
@@ -720,25 +796,33 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
             <div className="grid grid-cols-4 gap-1 text-center">
               <div className="p-2 rounded-lg bg-rose-50 border border-rose-100">
                 <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block mb-1" />
-                <div className="text-[10px] font-bold text-rose-800">1. Reported</div>
+                <div className="text-[10px] font-bold text-rose-800">
+                  1. Reported
+                </div>
                 <div className="text-[9px] text-slate-500">Citizen logged</div>
               </div>
 
               <div className="p-2 rounded-lg bg-amber-50 border border-amber-100">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block mb-1" />
-                <div className="text-[10px] font-bold text-amber-800">2. Assigned</div>
+                <div className="text-[10px] font-bold text-amber-800">
+                  2. Assigned
+                </div>
                 <div className="text-[9px] text-slate-500">Ward vehicle</div>
               </div>
 
               <div className="p-2 rounded-lg bg-sky-50 border border-sky-100">
                 <span className="w-2.5 h-2.5 rounded-full bg-sky-500 inline-block mb-1" />
-                <div className="text-[10px] font-bold text-sky-800">3. Cleaning</div>
+                <div className="text-[10px] font-bold text-sky-800">
+                  3. Cleaning
+                </div>
                 <div className="text-[9px] text-slate-500">In progress</div>
               </div>
 
               <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-100">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block mb-1" />
-                <div className="text-[10px] font-bold text-emerald-800">4. Resolved</div>
+                <div className="text-[10px] font-bold text-emerald-800">
+                  4. Resolved
+                </div>
                 <div className="text-[9px] text-slate-500">Peer verified</div>
               </div>
             </div>
@@ -747,8 +831,12 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
           <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="text-sm font-bold text-slate-900">Chittoor Hotspots Feed</h4>
-                <p className="text-xs text-slate-500">Active reports in pilot</p>
+                <h4 className="text-sm font-bold text-slate-900">
+                  Chittoor Hotspots Feed
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Active reports in pilot
+                </p>
               </div>
 
               <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg text-xs">
@@ -799,6 +887,7 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
                         >
                           {report.status}
                         </span>
+
                         <span className="text-[10px] text-slate-400">
                           {report.reportedAt}
                         </span>
@@ -866,4 +955,3 @@ export const ReportWasteView: React.FC<ReportWasteViewProps> = ({
     </div>
   );
 };
-```
